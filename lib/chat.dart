@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_sound/flutter_sound.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:sound_stream/sound_stream.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:path_provider/path_provider.dart';
 
 class Chat extends StatefulWidget {
   Chat({Key? key}) : super(key: key);
@@ -15,40 +16,60 @@ class Chat extends StatefulWidget {
 class _ChatState extends State<Chat> {
   final List<ChatMessage> _messages = <ChatMessage>[];
   final TextEditingController _textController = TextEditingController();
-  final RecorderStream _recorder = RecorderStream();
+  FlutterSoundRecorder? _recorder;
   StreamSubscription? _recorderStatus;
   StreamSubscription<List<int>>? _audioStreamSubscription;
   BehaviorSubject<List<int>>? _audioStream;
   bool _isRecording = false;
+  String? _audioFilePath;
 
   // Google Generative AI API Key (Replace with your key)
-  final String apiKey = 'AIzaSyBmhL2kw5wiDYKjzShHqGBs42I15_MMqnA';
+  final String apiKey =;
   late GenerativeModel _model;
 
   @override
   void initState() {
     super.initState();
-    _model = GenerativeModel(model: 'gemini-pro', apiKey: apiKey);
-    initPlugin();
+    _model = GenerativeModel(model: 'gemini-1.5-flash', apiKey: apiKey);
+    _recorder = FlutterSoundRecorder();
+    initRecorder();
   }
 
   @override
   void dispose() {
-    _recorderStatus?.cancel();
-    _audioStreamSubscription?.cancel();
+    _recorder?.closeRecorder();
     super.dispose();
   }
 
-  Future<void> initPlugin() async {
-    _recorderStatus = _recorder.status.listen((status) {
-      if (mounted) {
-        setState(() {
-          _isRecording = status == SoundStreamStatus.Playing;
-        });
-      }
-    });
+  Future<void> initRecorder() async {
+    await _recorder?.openRecorder();
+    await _recorder?.setSubscriptionDuration(const Duration(milliseconds: 500));
+  }
 
-    await _recorder.initialize();
+  Future<void> stopRecording() async {
+    try {
+      await _recorder?.stopRecorder();
+      setState(() => _isRecording = false);
+      print('Recording saved at: $_audioFilePath');
+    } catch (e) {
+      print('Error stopping recording: $e');
+    }
+  }
+
+  Future<void> startRecording() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      _audioFilePath = '${directory.path}/recording.aac';
+
+      await _recorder?.startRecorder(
+        toFile: _audioFilePath!,
+        codec: Codec.aacADTS,
+      );
+
+      setState(() => _isRecording = true);
+    } catch (e) {
+      print('Error starting recording: $e');
+    }
   }
 
   void handleSubmitted(String text) async {
@@ -95,6 +116,10 @@ class _ChatState extends State<Chat> {
               margin: const EdgeInsets.symmetric(horizontal: 8.0),
               child: Row(
                 children: <Widget>[
+                  IconButton(
+                    icon: Icon(_isRecording ? Icons.mic_off : Icons.mic),
+                    onPressed: _isRecording ? stopRecording : startRecording,
+                  ),
                   Flexible(
                     child: TextField(
                       controller: _textController,
