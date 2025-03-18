@@ -1,10 +1,7 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_sound/flutter_sound.dart';
-import 'package:rxdart/rxdart.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 class Chat extends StatefulWidget {
   Chat({Key? key}) : super(key: key);
@@ -16,60 +13,65 @@ class Chat extends StatefulWidget {
 class _ChatState extends State<Chat> {
   final List<ChatMessage> _messages = <ChatMessage>[];
   final TextEditingController _textController = TextEditingController();
-  FlutterSoundRecorder? _recorder;
-  StreamSubscription? _recorderStatus;
-  StreamSubscription<List<int>>? _audioStreamSubscription;
-  BehaviorSubject<List<int>>? _audioStream;
-  bool _isRecording = false;
-  String? _audioFilePath;
+  stt.SpeechToText _speech = stt.SpeechToText();
+  bool _isListening = false;
 
-  // Google Generative AI API Key (Replace with your key)
-  final String apiKey =;
+  final String apiKey = 'YOUR_API_KEY';
   late GenerativeModel _model;
 
   @override
   void initState() {
     super.initState();
     _model = GenerativeModel(model: 'gemini-1.5-flash', apiKey: apiKey);
-    _recorder = FlutterSoundRecorder();
-    initRecorder();
+    _speech.initialize();
   }
 
-  @override
-  void dispose() {
-    _recorder?.closeRecorder();
-    super.dispose();
-  }
-
-  Future<void> initRecorder() async {
-    await _recorder?.openRecorder();
-    await _recorder?.setSubscriptionDuration(const Duration(milliseconds: 500));
-  }
-
-  Future<void> stopRecording() async {
-    try {
-      await _recorder?.stopRecorder();
-      setState(() => _isRecording = false);
-      print('Recording saved at: $_audioFilePath');
-    } catch (e) {
-      print('Error stopping recording: $e');
-    }
-  }
-
-  Future<void> startRecording() async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      _audioFilePath = '${directory.path}/recording.aac';
-
-      await _recorder?.startRecorder(
-        toFile: _audioFilePath!,
-        codec: Codec.aacADTS,
+  void startListening() async {
+    bool available = await _speech.initialize();
+    if (available) {
+      setState(() => _isListening = true);
+      showRecordingDialog();
+      _speech.listen(
+        onResult: (result) {
+          if (result.recognizedWords.isNotEmpty) {
+            handleSubmitted(result.recognizedWords);
+          }
+        },
       );
-
-      setState(() => _isRecording = true);
-    } catch (e) {
-      print('Error starting recording: $e');
     }
+  }
+
+  void stopListening() {
+    _speech.stop();
+    setState(() => _isListening = false);
+    Navigator.of(context).pop();
+  }
+
+  void showRecordingDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 20),
+                Text("Listening...", style: TextStyle(fontSize: 18)),
+                SizedBox(height: 10),
+                ElevatedButton(onPressed: stopListening, child: Text("Stop")),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void handleSubmitted(String text) async {
@@ -95,105 +97,124 @@ class _ChatState extends State<Chat> {
     }
   }
 
+  void cleanChat() {
+    setState(() {
+      _messages.clear();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: <Widget>[
-        Flexible(
-          child: ListView.builder(
-            padding: EdgeInsets.all(8.0),
-            reverse: true,
-            itemBuilder: (_, int index) => _messages[index],
-            itemCount: _messages.length,
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Bot Chat AI Agent'),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+      ),
+
+      body: Column(
+        children: <Widget>[
+          Expanded(
+            child: GestureDetector(
+              onTap: () => FocusScope.of(context).unfocus(),
+              child:
+                  _messages.isEmpty
+                      ? Center(
+                        child: Text(
+                          'Start chatting with the bot!',
+                          style: TextStyle(fontSize: 18),
+                        ),
+                      )
+                      : ListView.builder(
+                        padding: EdgeInsets.all(8.0),
+                        reverse: true,
+                        itemBuilder: (_, int index) => _messages[index],
+                        itemCount: _messages.length,
+                      ),
+            ),
           ),
-        ),
-        Divider(height: 1.0),
-        Container(
-          decoration: BoxDecoration(color: Theme.of(context).cardColor),
-          child: IconTheme(
-            data: IconThemeData(color: Theme.of(context).colorScheme.secondary),
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 8.0),
-              child: Row(
-                children: <Widget>[
-                  IconButton(
-                    icon: Icon(_isRecording ? Icons.mic_off : Icons.mic),
-                    onPressed: _isRecording ? stopRecording : startRecording,
-                  ),
-                  Flexible(
-                    child: TextField(
-                      controller: _textController,
-                      onSubmitted: handleSubmitted,
-                      decoration: InputDecoration.collapsed(
-                        hintText: "Send a message",
+          if (_messages.isNotEmpty)
+            ElevatedButton(onPressed: cleanChat, child: Text('Clear Chat')),
+          SizedBox(height: 10),
+          Divider(height: 1.0),
+
+          Container(
+            decoration: BoxDecoration(color: Theme.of(context).cardColor),
+            child: IconTheme(
+              data: IconThemeData(
+                color: Theme.of(context).colorScheme.secondary,
+              ),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 8.0),
+                padding: const EdgeInsets.all(5.0),
+                child: Row(
+                  children: <Widget>[
+                    IconButton(
+                      icon: Icon(_isListening ? Icons.mic_off : Icons.mic),
+                      onPressed: _isListening ? stopListening : startListening,
+                    ),
+                    Flexible(
+                      child: TextField(
+                        controller: _textController,
+                        onSubmitted: handleSubmitted,
+                        decoration: InputDecoration.collapsed(
+                          hintText: "Send a message",
+                        ),
+                        style: TextStyle(fontSize: 16.0),
                       ),
                     ),
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.send),
-                    onPressed: () => handleSubmitted(_textController.text),
-                  ),
-                ],
+                    IconButton(
+                      icon: Icon(Icons.send),
+                      onPressed: () => handleSubmitted(_textController.text),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
 class ChatMessage extends StatelessWidget {
-  ChatMessage({required this.text, required this.name, required this.type});
-
   final String text;
   final String name;
-  final bool type;
+  final bool type; // true: user, false: bot
+
+  const ChatMessage({
+    super.key,
+    required this.text,
+    required this.name,
+    required this.type,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 10.0),
+      margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: type ? _myMessage(context) : _otherMessage(context),
+        children: [
+          if (!type) CircleAvatar(child: Text(name[0])),
+          if (!type) SizedBox(width: 10),
+          Expanded(
+            child: Container(
+              padding: EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: type ? Colors.blue[100] : Colors.grey[300],
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: MarkdownBody(
+                data: text, // Hiển thị nội dung Markdown
+                selectable: true, // Cho phép chọn văn bản
+              ),
+            ),
+          ),
+          if (type) SizedBox(width: 10),
+          if (type) CircleAvatar(child: Text(name[0])),
+        ],
       ),
     );
-  }
-
-  List<Widget> _myMessage(context) {
-    return <Widget>[
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: <Widget>[
-            Text(name, style: Theme.of(context).textTheme.bodySmall),
-            Container(
-              margin: const EdgeInsets.only(top: 5.0),
-              child: Text(text),
-            ),
-          ],
-        ),
-      ),
-      CircleAvatar(child: Text(name[0])),
-    ];
-  }
-
-  List<Widget> _otherMessage(context) {
-    return <Widget>[
-      CircleAvatar(child: Text('B')),
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(name, style: TextStyle(fontWeight: FontWeight.bold)),
-            Container(
-              margin: const EdgeInsets.only(top: 5.0),
-              child: Text(text),
-            ),
-          ],
-        ),
-      ),
-    ];
   }
 }
